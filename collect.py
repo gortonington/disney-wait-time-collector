@@ -41,32 +41,43 @@ def get_main_park_statuses(data):
     
     return park_statuses
 
-# --- NEW HELPER FUNCTION ---
+# --- REVISED HELPER FUNCTION (WITH DEBUGGING) ---
 def find_parent_park(entity_id, entity_map):
     """
     Walks up the 'family tree' from a given entity ID to find its parent THEME_PARK.
     We use a loop with a max_depth to prevent infinite loops on bad data.
     """
+    print(f"\n--- DEBUG: Starting find_parent_park for entity ID: {entity_id} ---")
     current_id = entity_id
-    for _ in range(10): # Max 10 hops up the tree
+    
+    for i in range(10): # Max 10 hops up the tree
         entity = entity_map.get(current_id)
         
-        # If we can't find the entity, stop
+        # If we can't find the entity in our map
         if not entity:
+            print(f"--- DEBUG: Hop {i}: Error! ID {current_id} was not found in the entity_map. Stopping.")
             return None
             
+        entity_type = entity.get('entityType')
+        entity_name = entity.get('name')
+        
+        print(f"--- DEBUG: Hop {i}: Current ID {current_id} is '{entity_name}' (Type: {entity_type})")
+
         # If this entity is a THEME_PARK, we found it!
-        if entity.get('entityType') == 'THEME_PARK':
-            return entity.get('name')
+        if entity_type == 'THEME_PARK':
+            print(f"--- DEBUG: Success! Found THEME_PARK: '{entity_name}'.")
+            return entity_name
             
         # Otherwise, move up to this entity's parent
         current_id = entity.get('parent')
         
         # If there's no parent, stop
         if not current_id:
+            print(f"--- DEBUG: Hop {i}: Entity '{entity_name}' has no parent ID. Stopping.")
             return None
             
     # If we looped 10 times and found nothing, give up
+    print(f"--- DEBUG: Failed to find park after 10 hops. Stopping.")
     return None
 
 # --- HEAVILY UPDATED FUNCTION ---
