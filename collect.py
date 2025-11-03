@@ -76,6 +76,33 @@ def save_to_database(data, conn):
         print(f"Error during database operation: {e}", file=sys.stderr)
         conn.rollback() # Rollback changes on error
 
+def get_main_park_statuses(data):
+    """Finds the 4 main theme parks and returns their current status."""
+
+    # These names must match the API data exactly
+    main_park_names = [
+        "Magic Kingdom Park",
+        "Epcot",  # The API data uses "Epcot", not "EPCOT"
+        "Disney's Hollywood Studios",
+        "Disney's Animal Kingdom Theme Park"
+    ]
+
+    park_statuses = {}
+
+    if 'liveData' not in data:
+        print("No 'liveData' key in API response.")
+        return None
+
+    # Find the 4 main park entities
+    for entity in data['liveData']:
+        if entity.get('entityType') == 'THEME_PARK' and entity.get('name') in main_park_names:
+            park_name = entity['name']
+            status = entity.get('status', 'Unknown')
+            park_statuses[park_name] = status
+            print(f"Status check: {park_name} is {status}")
+
+    return park_statuses
+
 def main():
     if not DB_URL:
         print("Error: DB_CONNECTION_STRING secret is not set.", file=sys.stderr)
@@ -84,6 +111,28 @@ def main():
     api_data = fetch_wait_times()
 
     if api_data:
+
+        park_statuses = get_main_park_statuses(api_data)
+
+        if park_statuses:
+            # Check if ALL main parks are closed
+            all_closed = all(status == 'CLOSED' for status in park_statuses.values())
+
+            # We want to make sure we found all 4 parks before trusting the "all_closed" check
+            # This prevents a bad API response from shutting down the script
+            found_all_parks = len(park_statuses) == 4
+
+            if found_all_parks and all_closed:
+                print("All 4 main parks are reporting 'CLOSED'. Exiting script.")
+                sys.exit(0) # Exit successfully without error
+            elif not found_all_parks:
+                print("Warning: Did not find all 4 main parks in API response. Proceeding to save data just in case.")
+            else:
+                print("At least one main park is open. Proceeding to save data.")
+        else:
+            print("Could not determine park statuses. Proceeding to save data.")
+
+        
         try:
             # Connect to the Supabase database
             with psycopg2.connect(DB_URL) as conn:
