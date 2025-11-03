@@ -51,8 +51,7 @@ def save_to_database(data, conn):
         print("No 'liveData' key in API response.")
         return
 
-    # --- Build a quick-lookup map of all entities ---
-    # We still need this to map the parkId to its name
+    # Build a quick-lookup map of all entities
     try:
         entity_map = {entity['id']: entity for entity in data['liveData']}
     except KeyError as e:
@@ -68,40 +67,43 @@ def save_to_database(data, conn):
                 # We only want to save ATTRACTION entities
                 if entity.get('entityType') == 'ATTRACTION':
                     
-                    # --- NEW, SIMPLIFIED PARK NAME LOGIC ---
-                    park_name = "Unknown" # Default
-                    park_id = entity.get('parkId') # Get the direct parkId
+                    # --- Park Name Logic (Unchanged) ---
+                    park_name = "Unknown" 
+                    park_id = entity.get('parkId')
                     
                     if park_id:
-                        # Use the parkId to look up the park's entity in our map
                         park_entity = entity_map.get(park_id)
                         if park_entity:
-                            # Get the name from that park's entity
                             park_name = park_entity.get('name', 'Unknown')
                         else:
                             print(f"Warning: Found parkId {park_id} but no matching entity in map.")
-                    # --- END NEW LOGIC ---
                     
                     ride_name = entity.get('name')
                     status = entity.get('status', 'Unknown')
                     
-                    # 'queue' contains wait time info if it exists
+                    # --- NEW: Get the specific attraction type ---
+                    # This is nested inside the 'tags' object in the API data
+                    entity_tags = entity.get('tags', {}) # Get tags, or empty dict if 'tags' doesn't exist
+                    attraction_type = entity_tags.get('type') # Get 'type' from tags, or None (e.g., "RIDE", "SHOW")
+                    
+                    # --- Wait Time Logic (Unchanged) ---
                     wait_time = None
                     if 'queue' in entity and 'STANDBY' in entity['queue']:
                         wait_time = entity['queue']['STANDBY'].get('waitTime')
                     
                     if ride_name:
+                        # --- MODIFIED: Add 'attraction_type' to the SQL command ---
                         cursor.execute(
                             """
-                            INSERT INTO wait_times (park_name, ride_name, wait_time_minutes, status)
-                            VALUES (%s, %s, %s, %s)
+                            INSERT INTO wait_times (park_name, ride_name, wait_time_minutes, status, attraction_type)
+                            VALUES (%s, %s, %s, %s, %s)
                             """,
-                            (park_name, ride_name, wait_time, status)
+                            (park_name, ride_name, wait_time, status, attraction_type) # <-- Added attraction_type
                         )
                         rides_processed += 1
         
         conn.commit()
-        print(f"Successfully saved data for {rides_processed} rides.")
+        print(f"Successfully saved data for {rides_processed} rides. (Now including attraction_type)")
     
     except Exception as e:
         print(f"Error during database operation: {e}", file=sys.stderr)
