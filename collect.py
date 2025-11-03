@@ -41,7 +41,57 @@ def get_main_park_statuses(data):
     
     return park_statuses
 
-# --- We no longer need the find_parent_park function ---
+def get_main_park_data(data):
+    """
+    Finds the 4 main theme parks and returns their full operating data.
+    Returns a list of dictionaries.
+    """
+    main_park_names = [
+        "Magic Kingdom Park",
+        "Epcot",
+        "Disney's Hollywood Studios",
+        "Disney's Animal Kingdom Theme Park"
+    ]
+    
+    park_data_list = []
+    
+    if 'liveData' not in data:
+        print("No 'liveData' key in API response.")
+        return [] # Return an empty list
+
+    # --- NEW: Check for both types ---
+    park_entity_types = ["THEME_PARK", "PARK"]
+
+    for entity in data['liveData']:
+        # --- MODIFIED: Check if entityType is in our list ---
+        if entity.get('entityType') in park_entity_types and entity.get('name') in main_park_names:
+            name = entity['name']
+            status = entity.get('status', 'Unknown')
+            
+            # --- Get new fields ---
+            forecast_status = entity.get('crowdLevel', 'Unknown') # API uses 'crowdLevel'
+            open_time = None
+            close_time = None
+
+            op_hours_list = entity.get('operatingHours', [])
+            for schedule in op_hours_list:
+                if schedule.get('type') == 'OPERATING':
+                    open_time = schedule.get('startTime')
+                    close_time = schedule.get('endTime')
+                    break # Found the main schedule, stop looking
+            
+            park_data = {
+                "name": name,
+                "status": status,
+                "forecast_status": forecast_status,
+                "open_time": open_time,
+                "close_time": close_time
+            }
+            park_data_list.append(park_data)
+            
+            print(f"Status check: {name} is {status}. Open: {open_time} Close: {close_time}")
+    
+    return park_data_list
 
 def save_to_database(data, conn):
     """Saves the relevant ride data to the PostgreSQL database."""
@@ -51,59 +101,69 @@ def save_to_database(data, conn):
         print("No 'liveData' key in API response.")
         return
 
-    # Build a quick-lookup map of all entities
-    try:
-        entity_map = {entity['id']: entity for entity in data['liveData']}
-    except KeyError as e:
-        print(f"Error building entity map, an entity was missing an 'id': {e}", file=sys.stderr)
-        return
-    except TypeError as e:
-        print(f"Error building entity map, 'liveData' was not a list: {e}", file=sys.stderr)
-        return
+    # --- NEW LOGIC: Build a dedicated park_map as you suggested ---
+    # We will look for both "PARK" and "THEME_PARK" to be safe
+    park_entity_types = ["THEME_PARK", "PARK"]
+    park_map = {}
+    for entity in data['liveData']:
+        if entity.get('entityType') in park_entity_types:
+            park_map[entity['id']] = entity.get('name')
+            
+    if not park_map:
+        print("--- DEBUG: park_map is EMPTY. No entities found with type 'PARK' or 'THEME_PARK'.")
+    else:
+        print(f"--- DEBUG: Built park_map with {len(park_map)} parks: {park_map}")
+    # --- END NEW LOGIC ---
 
     try:
         with conn.cursor() as cursor:
+            debug_rides_printed = 0 # Counter to limit debug spam
             for entity in data['liveData']:
                 # We only want to save ATTRACTION entities
                 if entity.get('entityType') == 'ATTRACTION':
                     
-                    # --- Park Name Logic (Unchanged) ---
+                    # --- NEW, SIMPLIFIED PARK NAME LOGIC ---
                     park_name = "Unknown" 
-                    park_id = entity.get('parkId')
+                    park_id = entity.get('parkId') # Get the direct parkId
                     
+                    # Print debug info for the first 5 rides
+                    if debug_rides_printed < 5: 
+                        print(f"--- DEBUG: Ride '{entity.get('name')}' has parkId: '{park_id}'")
+                        debug_rides_printed += 1
+
                     if park_id:
-                        park_entity = entity_map.get(park_id)
-                        if park_entity:
-                            park_name = park_entity.get('name', 'Unknown')
-                        else:
-                            print(f"Warning: Found parkId {park_id} but no matching entity in map.")
+                        # Use the park_id to look up the name in our new map
+                        park_name = park_map.get(park_id, "Unknown")
+                        if park_name == "Unknown":
+                            print(f"--- DEBUG: Warning! parkId '{park_id}' (for ride '{entity.get('name')}') was not found in the park_map.")
+                    else:
+                        if debug_rides_printed < 10: # Only print this warning a few times
+                           print(f"--- DEBUG: Warning! Ride '{entity.get('name')}' is missing a parkId field.")
+                           debug_rides_printed += 1 # Use same counter
+                    # --- END NEW LOGIC ---
                     
                     ride_name = entity.get('name')
                     status = entity.get('status', 'Unknown')
                     
-                    # --- NEW: Get the specific attraction type ---
-                    # This is nested inside the 'tags' object in the API data
-                    entity_tags = entity.get('tags', {}) # Get tags, or empty dict if 'tags' doesn't exist
-                    attraction_type = entity_tags.get('type') # Get 'type' from tags, or None (e.g., "RIDE", "SHOW")
+                    entity_tags = entity.get('tags', {})
+                    attraction_type = entity_tags.get('type')
                     
-                    # --- Wait Time Logic (Unchanged) ---
                     wait_time = None
                     if 'queue' in entity and 'STANDBY' in entity['queue']:
                         wait_time = entity['queue']['STANDBY'].get('waitTime')
                     
                     if ride_name:
-                        # --- MODIFIED: Add 'attraction_type' to the SQL command ---
                         cursor.execute(
                             """
                             INSERT INTO wait_times (park_name, ride_name, wait_time_minutes, status, attraction_type)
                             VALUES (%s, %s, %s, %s, %s)
                             """,
-                            (park_name, ride_name, wait_time, status, attraction_type) # <-- Added attraction_type
+                            (park_name, ride_name, wait_time, status, attraction_type)
                         )
                         rides_processed += 1
         
         conn.commit()
-        print(f"Successfully saved data for {rides_processed} rides. (Now including attraction_type)")
+        print(f"Successfully saved data for {rides_processed} rides.")
     
     except Exception as e:
         print(f"Error during database operation: {e}", file=sys.stderr)
