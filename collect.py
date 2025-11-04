@@ -98,46 +98,35 @@ def get_main_park_data(data):
 def save_to_database(data, conn):
     """
     DEBUGGING FUNCTION: This function will print the raw data for
-    one PARK and one ATTRACTION to the log, then exit.
+    the FIRST 5 ENTITIES in the list, whatever they are.
     """
-    if 'liveData' not in data:
-        print("No 'liveData' key in API response.")
-        return
-
-    print("--- STARTING DEBUGGING MODE ---")
     
-    debug_park_printed = False
-    debug_ride_printed = False
-    park_entity_types = ["THEME_PARK", "PARK"]
+    if 'liveData' not in data or not data['liveData']:
+        print("--- DEBUG: 'liveData' key is missing or the list is empty. ---")
+        sys.exit(0) # Exit successfully
 
+    print("--- STARTING NEW DEBUGGING MODE (Printing first 5 entities) ---")
+    
+    counter = 0
     for entity in data['liveData']:
-        
-        # --- Find and print ONE park ---
-        if entity.get('entityType') in park_entity_types and not debug_park_printed:
-            print("\n\n--- 1. FOUND A 'PARK' ENTITY ---")
-            print(json.dumps(entity, indent=2))
-            print("----------------------------------\n\n")
-            debug_park_printed = True
-        
-        # --- Find and print ONE attraction ---
-        if entity.get('entityType') == 'ATTRACTION' and not debug_ride_printed:
-            print("\n\n--- 2. FOUND AN 'ATTRACTION' ENTITY ---")
-            print(json.dumps(entity, indent=2))
-            print("----------------------------------------\n\n")
-            debug_ride_printed = True
-
-        # --- Stop once we have both ---
-        if debug_park_printed and debug_ride_printed:
+        if counter < 5:
+            print(f"\n\n--- ENTITY {counter + 1} (RAW DATA) ---")
+            try:
+                print(json.dumps(entity, indent=2))
+            except Exception as e:
+                print(f"Error printing entity: {e}")
+                print(f"RAW ENTITY (unformatted): {entity}")
+            print("--------------------------\n\n")
+            counter += 1
+        else:
+            # Once we have 5, stop looping
             break
             
-    print("--- DEBUGGING COMPLETE ---")
-    print("Please copy the two JSON blocks above from the log and paste them in the chat.")
+    print("--- DEBUGGING COMPLETE (Printed first 5 entities) ---")
+    print("Please copy the 5 JSON blocks above from the log and paste them in the chat.")
     print("This script will now exit without saving to the database.")
     
     # We are not saving any data in this debug run.
-    # We just want to see the output.
-    
-    # We will exit with a "success" (0) so the Action doesn't show as "failed"
     sys.exit(0)
 
 def main():
