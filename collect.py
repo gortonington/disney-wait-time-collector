@@ -114,6 +114,89 @@ def get_main_park_data(data):
     
     return park_statuses
 
+def save_daily_park_data(data, conn):
+    """
+    Saves the daily operating hours and forecast data.
+    This function now looks at the 'schedule' key, which is
+    where this data actually lives.
+    """
+    if 'schedule' not in data:
+        print("Error: 'schedule' key not found in API response.")
+        return
+
+    print("Attempting to save daily park data from 'schedule' key...")
+    saved_count = 0
+    
+    # These are the parks we want to save daily data for
+    main_park_names = [
+        "Magic Kingdom Park",
+        "Epcot",
+        "Disney's Hollywood Studios",
+        "Disney's Animal Kingdom Theme Park"
+    ]
+    
+    try:
+        with conn.cursor() as cursor:
+            # Iterate over the SCHEDULE list, not liveData
+            for park_schedule in data['schedule']:
+                
+                park_name = park_schedule.get('name')
+                
+                # Only save data for our 4 main parks
+                if park_name in main_park_names:
+                    
+                    # --- Get the new fields from the correct location ---
+                    forecast_status = park_schedule.get('crowdLevel') # Correct field
+                    open_time = None
+                    close_time = None
+
+                    # Find the 'OPERATING' hours in the list
+                    op_hours_list = park_schedule.get('operatingHours', [])
+                    for schedule in op_hours_list:
+                        if schedule.get('type') == 'OPERATING':
+                            open_time = schedule.get('startTime')
+                            close_time = schedule.get('endTime')
+                            break # Found it, stop looking
+                    
+                    # --- End new fields ---
+
+                    # We need a valid date to save
+                    if open_time:
+                        data_date = datetime.fromisoformat(open_time).date()
+                    else:
+                        # If park is closed (no open time), use today's date
+                        data_date = datetime.now(timezone.utc).date()
+
+                    print(f"Found schedule for {park_name}: Open: {open_time}, Close: {close_time}, Forecast: {forecast_status}")
+
+                    cursor.execute(
+                        """
+                        INSERT INTO park_operating_data 
+                            (data_date, park_name, open_time, close_time, forecast_status)
+                        VALUES 
+                            (%s, %s, %s, %s, %s)
+                        ON CONFLICT (park_name, data_date) DO NOTHING;
+                        """,
+                        (
+                            data_date,
+                            park_name,
+                            open_time,
+                            close_time,
+                            forecast_status
+                        )
+                    )
+                    saved_count += cursor.rowcount
+        
+        conn.commit()
+        if saved_count > 0:
+            print(f"Successfully saved new daily data for {saved_count} parks.")
+        else:
+            print("Daily park data is already up-to-date.")
+            
+    except Exception as e:
+        print(f"Error saving daily park data: {e}", file=sys.stderr)
+        conn.rollback()
+
 def save_to_database(data, conn):
     """Saves the relevant ride data to the PostgreSQL database."""
     rides_processed = 0
