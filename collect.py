@@ -9,6 +9,7 @@ _debug_main_park_printed = False # This will help us print only once
 # --- 1. CONFIGURATION ---
 DB_URL = os.environ.get("DB_CONNECTION_STRING")
 API_ENDPOINT = "https://api.themeparks.wiki/v1/entity/waltdisneyworldresort/live"
+SCHEDULE_ENDPOINT = "https://api.themeparks.wiki/v1/entity/waltdisneyworldresort/schedule"
 
 def fetch_wait_times():
     """Fetches live wait time data from the API."""
@@ -20,6 +21,18 @@ def fetch_wait_times():
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"Error fetching from API: {e}", file=sys.stderr)
+        return None
+
+def fetch_schedule_data():
+    """Fetches schedule data (hours, forecast) from the schedule API."""
+    try:
+        print("Fetching schedule data from API...")
+        response = requests.get(SCHEDULE_ENDPOINT)
+        response.raise_for_status()
+        print("Schedule data fetched successfully.")
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching schedule data: {e}", file=sys.stderr)
         return None
 
 def get_main_park_data(data):
@@ -114,20 +127,20 @@ def get_main_park_data(data):
     
     return park_statuses
 
-def save_daily_park_data(data, conn):
+def save_daily_park_data(schedule_data, conn):
     """
-    Saves the daily operating hours and forecast data.
-    This function now looks at the 'schedule' key, which is
-    where this data actually lives.
+    Saves the daily operating hours and forecast data from the
+    dedicated schedule data response.
     """
-    if 'schedule' not in data:
-        print("Error: 'schedule' key not found in API response.")
+    # The response object is {"schedule": [...]}. We need to get that list.
+    if not schedule_data or 'schedule' not in schedule_data:
+        print("Error: 'schedule' key not found in schedule data response. Skipping daily data.")
         return
 
+    schedule_list = schedule_data['schedule']
     print("Attempting to save daily park data from 'schedule' key...")
     saved_count = 0
     
-    # These are the parks we want to save daily data for
     main_park_names = [
         "Magic Kingdom Park",
         "Epcot",
@@ -137,34 +150,27 @@ def save_daily_park_data(data, conn):
     
     try:
         with conn.cursor() as cursor:
-            # Iterate over the SCHEDULE list, not liveData
-            for park_schedule in data['schedule']:
+            # Iterate over the SCHEDULE list
+            for park_schedule in schedule_list:
                 
                 park_name = park_schedule.get('name')
                 
-                # Only save data for our 4 main parks
                 if park_name in main_park_names:
                     
-                    # --- Get the new fields from the correct location ---
-                    forecast_status = park_schedule.get('crowdLevel') # Correct field
+                    forecast_status = park_schedule.get('crowdLevel')
                     open_time = None
                     close_time = None
 
-                    # Find the 'OPERATING' hours in the list
                     op_hours_list = park_schedule.get('operatingHours', [])
                     for schedule in op_hours_list:
                         if schedule.get('type') == 'OPERATING':
                             open_time = schedule.get('startTime')
                             close_time = schedule.get('endTime')
-                            break # Found it, stop looking
+                            break 
                     
-                    # --- End new fields ---
-
-                    # We need a valid date to save
                     if open_time:
                         data_date = datetime.fromisoformat(open_time).date()
                     else:
-                        # If park is closed (no open time), use today's date
                         data_date = datetime.now(timezone.utc).date()
 
                     print(f"Found schedule for {park_name}: Open: {open_time}, Close: {close_time}, Forecast: {forecast_status}")
@@ -198,14 +204,13 @@ def save_daily_park_data(data, conn):
         conn.rollback()
 
 def save_to_database(data, conn):
-    """Saves the relevant ride data to the PostgreSQL database."""
+    """Saves the relevant ride data from the 'liveData' list."""
     rides_processed = 0
     
     if 'liveData' not in data:
         print("No 'liveData' key in API response.")
         return
 
-    # --- Build the correct park_map ---
     park_entity_types = ["THEME_PARK", "PARK"]
     park_map = {}
     for entity in data['liveData']:
@@ -219,7 +224,6 @@ def save_to_database(data, conn):
 
     try:
         with conn.cursor() as cursor:
-            # Iterate over the LIVEDATA list for wait times
             for entity in data['liveData']:
                 if entity.get('entityType') == 'ATTRACTION':
                     
@@ -232,9 +236,13 @@ def save_to_database(data, conn):
                     ride_name = entity.get('name')
                     status = entity.get('status')
                     
-                    # --- FIX: Changed 'type' to 'event_type' ---
+                    # --- NEW ATTRACTION_TYPE LOGIC (WITH FALLBACK) ---
                     entity_tags = entity.get('tags', {})
-                    attraction_type = entity_tags.get('event_type')
+                    attraction_type = entity_tags.get('event_type') # Try to get 'event_type' first
+                    
+                    if not attraction_type: # If it's None or empty...
+                        attraction_type = entity.get('entityType') #...fallback to 'entityType'
+                    # --- END NEW LOGIC ---
                     
                     wait_time = None
                     if 'queue' in entity and 'STANDBY' in entity['queue']:
@@ -251,7 +259,7 @@ def save_to_database(data, conn):
                         rides_processed += 1
         
         conn.commit()
-        print(f"Successfully saved data for {rides_processed} rides. (Using 'event_type' for attraction_type)")
+        print(f"Successfully saved data for {rides_processed} rides. (Using fallback for attraction_type)")
     
     except Exception as e:
         print(f"Error during database operation: {e}", file=sys.stderr)
@@ -267,21 +275,22 @@ def main():
     
     print("Successfully loaded DB_CONNECTION_STRING secret.")
 
+    # --- NEW: Call both endpoints ---
     api_data = fetch_wait_times()
+    schedule_data = fetch_schedule_data()
     
+    # We use api_data (live data) to check if parks are closed
     if api_data:
         
-        # 1. Get live park statuses
         park_statuses = get_main_park_data(api_data)
         
         if park_statuses:
-            # 2. Check if all parks are closed
             all_closed = all(status == 'CLOSED' for status in park_statuses.values())
             found_all_parks = len(park_statuses) == 4
 
             if found_all_parks and all_closed:
                 print("All 4 main parks are reporting 'CLOSED'. Exiting script.")
-                sys.exit(0) # Exit successfully
+                sys.exit(0)
             elif not found_all_parks:
                 print("Warning: Did not find all 4 main parks in liveData. Proceeding just in case.")
             else:
@@ -293,12 +302,12 @@ def main():
             with psycopg2.connect(DB_URL) as conn:
                 print("Database connection successful.")
                 
-                # 3. Try to save the daily park data (hours/forecast)
-                #    This now reads from api_data['schedule']
-                save_daily_park_data(api_data, conn)
+                # --- NEW: Pass the correct data to each function ---
                 
-                # 4. Save the wait time data
-                #    This now reads from api_data['liveData']
+                # Pass schedule_data to the daily data saver
+                save_daily_park_data(schedule_data, conn)
+                
+                # Pass api_data to the wait time saver
                 save_to_database(api_data, conn)
                 
         except psycopg2.OperationalError as e:
@@ -307,6 +316,11 @@ def main():
         except Exception as e:
             print(f"An unexpected error occurred: {e}", file=sys.stderr)
             sys.exit(1)
+    
+    else:
+        print("Failed to fetch live API data. Exiting.")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
