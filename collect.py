@@ -228,7 +228,6 @@ def save_to_database(data, conn, run_time):
     try:
         with conn.cursor() as cursor:
             for entity in data['liveData']:
-                if entity.get('entityType') == 'ATTRACTION':
                     
                     # --- NEW LOGIC: Check for parkId FIRST ---
                     park_id = entity.get('parkId')
@@ -239,11 +238,7 @@ def save_to_database(data, conn, run_time):
                         ride_name = entity.get('name')
                         status = entity.get('status')
                         
-                        entity_tags = entity.get('tags', {})
-                        attraction_type = entity_tags.get('event_type')
-                        
-                        if not attraction_type:
-                            attraction_type = entity.get('entityType')
+                        attraction_type = entity.get('entityType')
                         
                         wait_time = None
                         if 'queue' in entity and 'STANDBY' in entity['queue']:
