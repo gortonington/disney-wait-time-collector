@@ -3,7 +3,7 @@ import requests
 import psycopg2
 import sys
 from datetime import datetime, timezone
-import json 
+import json # Keep this just in case
 
 # --- 1. CONFIGURATION ---
 DB_URL = os.environ.get("DB_CONNECTION_STRING")
@@ -21,28 +21,6 @@ def fetch_wait_times():
         print(f"Error fetching from API: {e}", file=sys.stderr)
         return None
 
-def get_main_park_statuses(data):
-    """Finds the 4 main theme parks and returns their current status."""
-    main_park_names = [
-        "Magic Kingdom Park",
-        "Epcot",
-        "Disney's Hollywood Studios",
-        "Disney's Animal Kingdom Theme Park"
-    ]
-    park_statuses = {}
-    if 'liveData' not in data:
-        print("No 'liveData' key in API response.")
-        return None
-    
-    for entity in data['liveData']:
-        if entity.get('entityType') == 'THEME_PARK' and entity.get('name') in main_park_names:
-            park_name = entity['name']
-            status = entity.get('status', 'Unknown')
-            park_statuses[park_name] = status
-            print(f"Status check: {park_name} is {status}")
-    
-    return park_statuses
-
 def get_main_park_data(data):
     """
     Finds the 4 main theme parks and returns their full operating data.
@@ -54,24 +32,21 @@ def get_main_park_data(data):
         "Disney's Hollywood Studios",
         "Disney's Animal Kingdom Theme Park"
     ]
-    
     park_data_list = []
     
     if 'liveData' not in data:
         print("No 'liveData' key in API response.")
-        return [] # Return an empty list
+        return []
 
-    # --- NEW: Check for both types ---
+    # The debug log confirmed 'PARK' is used. We'll check both just in case.
     park_entity_types = ["THEME_PARK", "PARK"]
 
     for entity in data['liveData']:
-        # --- MODIFIED: Check if entityType is in our list ---
         if entity.get('entityType') in park_entity_types and entity.get('name') in main_park_names:
             name = entity['name']
             status = entity.get('status', 'Unknown')
             
-            # --- Get new fields ---
-            forecast_status = entity.get('crowdLevel', 'Unknown') # API uses 'crowdLevel'
+            forecast_status = entity.get('crowdLevel', 'Unknown')
             open_time = None
             close_time = None
 
@@ -80,7 +55,7 @@ def get_main_park_data(data):
                 if schedule.get('type') == 'OPERATING':
                     open_time = schedule.get('startTime')
                     close_time = schedule.get('endTime')
-                    break # Found the main schedule, stop looking
+                    break
             
             park_data = {
                 "name": name,
@@ -95,39 +70,118 @@ def get_main_park_data(data):
     
     return park_data_list
 
-def save_to_database(data, conn):
+def save_daily_park_data(park_data_list, conn):
     """
-    DEBUGGING FUNCTION: This function will print the raw data for
-    the FIRST 5 ENTITIES in the list, whatever they are.
+    Saves the daily operating hours and forecast data.
+    Uses "ON CONFLICT DO NOTHING" to ensure we only save one record
+    per park, per day.
     """
-    
-    if 'liveData' not in data or not data['liveData']:
-        print("--- DEBUG: 'liveData' key is missing or the list is empty. ---")
-        sys.exit(0) # Exit successfully
+    if not park_data_list:
+        return
 
-    print("--- STARTING NEW DEBUGGING MODE (Printing first 5 entities) ---")
-    
-    counter = 0
-    for entity in data['liveData']:
-        if counter < 5:
-            print(f"\n\n--- ENTITY {counter + 1} (RAW DATA) ---")
-            try:
-                print(json.dumps(entity, indent=2))
-            except Exception as e:
-                print(f"Error printing entity: {e}")
-                print(f"RAW ENTITY (unformatted): {entity}")
-            print("--------------------------\n\n")
-            counter += 1
+    print("Attempting to save daily park data...")
+    saved_count = 0
+    try:
+        with conn.cursor() as cursor:
+            for data in park_data_list:
+                if data['open_time']:
+                    # Convert ISO 8601 string to datetime object
+                    data_date = datetime.fromisoformat(data['open_time']).date()
+                else:
+                    data_date = datetime.now(timezone.utc).date()
+
+                cursor.execute(
+                    """
+                    INSERT INTO park_operating_data 
+                        (data_date, park_name, open_time, close_time, forecast_status)
+                    VALUES 
+                        (%s, %s, %s, %s, %s)
+                    ON CONFLICT (park_name, data_date) DO NOTHING;
+                    """,
+                    (
+                        data_date,
+                        data['name'],
+                        data['open_time'],
+                        data['close_time'],
+                        data['forecast_status']
+                    )
+                )
+                saved_count += cursor.rowcount
+        
+        conn.commit()
+        if saved_count > 0:
+            print(f"Successfully saved new daily data for {saved_count} parks.")
         else:
-            # Once we have 5, stop looping
-            break
+            print("Daily park data is already up-to-date.")
             
-    print("--- DEBUGGING COMPLETE (Printed first 5 entities) ---")
-    print("Please copy the 5 JSON blocks above from the log and paste them in the chat.")
-    print("This script will now exit without saving to the database.")
+    except Exception as e:
+        print(f"Error saving daily park data: {e}", file=sys.stderr)
+        conn.rollback()
+
+def save_to_database(data, conn):
+    """Saves the relevant ride data to the PostgreSQL database."""
+    rides_processed = 0
     
-    # We are not saving any data in this debug run.
-    sys.exit(0)
+    if 'liveData' not in data:
+        print("No 'liveData' key in API response.")
+        return
+
+    # --- Build the correct park_map ---
+    # The debug log confirms entityType is 'PARK'
+    park_entity_types = ["THEME_PARK", "PARK"]
+    park_map = {}
+    for entity in data['liveData']:
+        if entity.get('entityType') in park_entity_types:
+            park_map[entity['id']] = entity.get('name')
+            
+    if not park_map:
+        print("Warning: park_map is EMPTY. No parks found.")
+    else:
+        print(f"Built park_map with {len(park_map)} parks.")
+
+    try:
+        with conn.cursor() as cursor:
+            for entity in data['liveData']:
+                # We only want to save ATTRACTION entities
+                if entity.get('entityType') == 'ATTRACTION':
+                    
+                    # --- Correct Park Name Logic ---
+                    park_name = "Unknown" 
+                    park_id = entity.get('parkId') # Confirmed from log
+                    
+                    if park_id:
+                        # Look up the park_id in our map
+                        park_name = park_map.get(park_id, "Unknown")
+                    
+                    ride_name = entity.get('name')
+                    status = entity.get('status')
+                    
+                    # --- Correct Attraction Type Logic ---
+                    # This will be None if 'tags' or 'type' doesn't exist, which is correct
+                    entity_tags = entity.get('tags', {})
+                    attraction_type = entity_tags.get('type')
+                    
+                    # --- Wait Time Logic ---
+                    wait_time = None
+                    if 'queue' in entity and 'STANDBY' in entity['queue']:
+                        wait_time = entity['queue']['STANDBY'].get('waitTime')
+                    
+                    if ride_name:
+                        cursor.execute(
+                            """
+                            INSERT INTO wait_times (park_name, ride_name, wait_time_minutes, status, attraction_type)
+                            VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            (park_name, ride_name, wait_time, status, attraction_type)
+                        )
+                        rides_processed += 1
+        
+        conn.commit()
+        print(f"Successfully saved data for {rides_processed} rides.")
+    
+    except Exception as e:
+        print(f"Error during database operation: {e}", file=sys.stderr)
+        conn.rollback()
 
 def main():
     DB_URL = os.environ.get("DB_CONNECTION_STRING")
@@ -142,18 +196,17 @@ def main():
     api_data = fetch_wait_times()
     
     if api_data:
+        park_data_list = get_main_park_data(api_data)
         
-        park_statuses = get_main_park_statuses(api_data)
-        
-        if park_statuses:
-            all_closed = all(status == 'CLOSED' for status in park_statuses.values())
-            found_all_parks = len(park_statuses) == 4
+        if park_data_list:
+            all_closed = all(data['status'] == 'CLOSED' for data in park_data_list)
+            found_all_parks = len(park_data_list) == 4
 
             if found_all_parks and all_closed:
                 print("All 4 main parks are reporting 'CLOSED'. Exiting script.")
                 sys.exit(0)
             elif not found_all_parks:
-                print("Warning: Did not find all 4 main parks in API response. Proceeding to save data just in case.")
+                print("Warning: Did not find all 4 main parks in API response. Proceeding just in case.")
             else:
                 print("At least one main park is open. Proceeding to save data.")
         else:
@@ -162,7 +215,13 @@ def main():
         try:
             with psycopg2.connect(DB_URL) as conn:
                 print("Database connection successful.")
+                
+                # Try to save the daily park data (hours/forecast)
+                save_daily_park_data(park_data_list, conn)
+                
+                # Save the wait time data
                 save_to_database(api_data, conn)
+                
         except psycopg2.OperationalError as e:
             print(f"Error connecting to database: {e}", file=sys.stderr)
             sys.exit(1)
