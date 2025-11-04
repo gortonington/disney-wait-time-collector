@@ -241,7 +241,7 @@ def save_to_database(data, conn):
                     # attraction_type = entity_tags.get('event_type') # Try to get 'event_type' first
                     
                     #if not attraction_type: # If it's None or empty...
-                        attraction_type = entity.get('entityType') #...fallback to 'entityType'
+                    attraction_type = entity.get('entityType') #...fallback to 'entityType'
                     # --- END NEW LOGIC ---
                     
                     wait_time = None
