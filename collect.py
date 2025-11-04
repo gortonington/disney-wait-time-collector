@@ -203,9 +203,12 @@ def save_daily_park_data(schedule_data, conn):
         print(f"Error saving daily park data: {e}", file=sys.stderr)
         conn.rollback()
 
-def save_to_database(data, conn):
+# --- MODIFIED: Added 'run_time' as a new parameter ---
+# --- MODIFIED: Added 'run_time' as a new parameter ---
+def save_to_database(data, conn, run_time):
     """Saves the relevant ride data from the 'liveData' list."""
     rides_processed = 0
+    rides_skipped = 0 # <-- NEW: Counter for skipped records
     
     if 'liveData' not in data:
         print("No 'liveData' key in API response.")
@@ -225,34 +228,46 @@ def save_to_database(data, conn):
     try:
         with conn.cursor() as cursor:
             for entity in data['liveData']:
+                if entity.get('entityType') == 'ATTRACTION':
                     
-                    park_name = "Unknown" 
+                    # --- NEW LOGIC: Check for parkId FIRST ---
                     park_id = entity.get('parkId')
                     
+                    # If park_id is valid (not None), process the ride.
                     if park_id:
                         park_name = park_map.get(park_id, "Unknown")
+                        ride_name = entity.get('name')
+                        status = entity.get('status')
+                        
+                        entity_tags = entity.get('tags', {})
+                        attraction_type = entity_tags.get('event_type')
+                        
+                        if not attraction_type:
+                            attraction_type = entity.get('entityType')
+                        
+                        wait_time = None
+                        if 'queue' in entity and 'STANDBY' in entity['queue']:
+                            wait_time = entity['queue']['STANDBY'].get('waitTime')
+                        
+                        # Only insert if it has a ride name
+                        if ride_name:
+                            cursor.execute(
+                                """
+                                INSERT INTO wait_times (timestamp, park_name, ride_name, wait_time_minutes, status, attraction_type)
+                                VALUES (%s, %s, %s, %s, %s, %s)
+                                """,
+                                (run_time, park_name, ride_name, wait_time, status, attraction_type)
+                            )
+                            rides_processed += 1
                     
-                    ride_name = entity.get('name')
-                    status = entity.get('status')
-                    
-                    attraction_type = entity.get('entityType') 
-                    
-                    wait_time = None
-                    if 'queue' in entity and 'STANDBY' in entity['queue']:
-                        wait_time = entity['queue']['STANDBY'].get('waitTime')
-                    
-                    if ride_name:
-                        cursor.execute(
-                            """
-                            INSERT INTO wait_times (park_name, ride_name, wait_time_minutes, status, attraction_type)
-                            VALUES (%s, %s, %s, %s, %s)
-                            """,
-                            (park_name, ride_name, wait_time, status, attraction_type)
-                        )
-                        rides_processed += 1
+                    # If park_id is None (null), skip this entity
+                    else:
+                        rides_skipped += 1
+                    # --- END OF NEW LOGIC ---
         
         conn.commit()
-        print(f"Successfully saved data for {rides_processed} rides. (Using fallback for attraction_type)")
+        # --- MODIFIED: Updated print statement ---
+        print(f"Successfully saved data for {rides_processed} rides. Skipped {rides_skipped} attractions with null parkId. (Using script-generated timestamp)")
     
     except Exception as e:
         print(f"Error during database operation: {e}", file=sys.stderr)
@@ -268,11 +283,13 @@ def main():
     
     print("Successfully loaded DB_CONNECTION_STRING secret.")
 
-    # --- NEW: Call both endpoints ---
+    # --- NEW: Capture the current time in UTC ---
+    script_run_time = datetime.now(timezone.utc)
+    
+    # --- Call both endpoints ---
     api_data = fetch_wait_times()
     schedule_data = fetch_schedule_data()
     
-    # We use api_data (live data) to check if parks are closed
     if api_data:
         
         park_statuses = get_main_park_data(api_data)
@@ -295,13 +312,11 @@ def main():
             with psycopg2.connect(DB_URL) as conn:
                 print("Database connection successful.")
                 
-                # --- NEW: Pass the correct data to each function ---
-                
                 # Pass schedule_data to the daily data saver
                 save_daily_park_data(schedule_data, conn)
                 
-                # Pass api_data to the wait time saver
-                save_to_database(api_data, conn)
+                # --- MODIFIED: Pass the script_run_time to the wait time saver ---
+                save_to_database(api_data, conn, script_run_time)
                 
         except psycopg2.OperationalError as e:
             print(f"Error connecting to database: {e}", file=sys.stderr)
@@ -313,7 +328,6 @@ def main():
     else:
         print("Failed to fetch live API data. Exiting.")
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()
