@@ -3,7 +3,8 @@ import requests
 import psycopg2
 import sys
 from datetime import datetime, timezone
-import json # Keep this just in case
+import json # Make sure this is still here
+_debug_main_park_printed = False # This will help us print only once
 
 # --- 1. CONFIGURATION ---
 DB_URL = os.environ.get("DB_CONNECTION_STRING")
@@ -26,6 +27,8 @@ def get_main_park_data(data):
     Finds the 4 main theme parks and returns their full operating data.
     Returns a list of dictionaries.
     """
+    global _debug_main_park_printed # Use the global flag
+    
     main_park_names = [
         "Magic Kingdom Park",
         "Epcot",
@@ -38,15 +41,27 @@ def get_main_park_data(data):
         print("No 'liveData' key in API response.")
         return []
 
-    # The debug log confirmed 'PARK' is used. We'll check both just in case.
     park_entity_types = ["THEME_PARK", "PARK"]
 
     for entity in data['liveData']:
         if entity.get('entityType') in park_entity_types and entity.get('name') in main_park_names:
+            
+            # --- NEW DEBUG LOGIC ---
+            if not _debug_main_park_printed:
+                print("\n\n--- DEBUG: FOUND A MAIN PARK ENTITY ---")
+                try:
+                    print(json.dumps(entity, indent=2))
+                except Exception as e:
+                    print(f"Error printing entity: {e}")
+                print("---------------------------------------\n\n")
+                _debug_main_park_printed = True
+            # --- END DEBUG LOGIC ---
+
             name = entity['name']
             status = entity.get('status', 'Unknown')
             
-            forecast_status = entity.get('crowdLevel', 'Unknown')
+            # These are the field names we need to verify
+            forecast_status = entity.get('crowdLevel', 'Unknown') 
             open_time = None
             close_time = None
 
@@ -66,6 +81,7 @@ def get_main_park_data(data):
             }
             park_data_list.append(park_data)
             
+            # This print is still useful
             print(f"Status check: {name} is {status}. Open: {open_time} Close: {close_time}")
     
     return park_data_list
@@ -127,7 +143,6 @@ def save_to_database(data, conn):
         return
 
     # --- Build the correct park_map ---
-    # The debug log confirms entityType is 'PARK'
     park_entity_types = ["THEME_PARK", "PARK"]
     park_map = {}
     for entity in data['liveData']:
@@ -150,16 +165,15 @@ def save_to_database(data, conn):
                     park_id = entity.get('parkId') # Confirmed from log
                     
                     if park_id:
-                        # Look up the park_id in our map
                         park_name = park_map.get(park_id, "Unknown")
                     
                     ride_name = entity.get('name')
                     status = entity.get('status')
                     
                     # --- Correct Attraction Type Logic ---
-                    # This will be None if 'tags' or 'type' doesn't exist, which is correct
                     entity_tags = entity.get('tags', {})
-                    attraction_type = entity_tags.get('type')
+                    # This is the line we changed!
+                    attraction_type = entity_tags.get('event_type')
                     
                     # --- Wait Time Logic ---
                     wait_time = None
