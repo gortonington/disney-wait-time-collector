@@ -86,53 +86,33 @@ def get_main_park_data(data):
     
     return park_data_list
 
-def save_daily_park_data(park_data_list, conn):
+def get_main_park_data(data):
     """
-    Saves the daily operating hours and forecast data.
-    Uses "ON CONFLICT DO NOTHING" to ensure we only save one record
-    per park, per day.
+    Finds the 4 main theme parks IN THE LIVE DATA
+    and returns their current status for the "all parks closed" check.
     """
-    if not park_data_list:
-        return
+    main_park_names = [
+        "Magic Kingdom Park",
+        "Epcot",
+        "Disney's Hollywood Studios",
+        "Disney's Animal Kingdom Theme Park"
+    ]
+    park_statuses = {}
+    
+    if 'liveData' not in data:
+        print("No 'liveData' key in API response.")
+        return {}
 
-    print("Attempting to save daily park data...")
-    saved_count = 0
-    try:
-        with conn.cursor() as cursor:
-            for data in park_data_list:
-                if data['open_time']:
-                    # Convert ISO 8601 string to datetime object
-                    data_date = datetime.fromisoformat(data['open_time']).date()
-                else:
-                    data_date = datetime.now(timezone.utc).date()
+    park_entity_types = ["THEME_PARK", "PARK"]
 
-                cursor.execute(
-                    """
-                    INSERT INTO park_operating_data 
-                        (data_date, park_name, open_time, close_time, forecast_status)
-                    VALUES 
-                        (%s, %s, %s, %s, %s)
-                    ON CONFLICT (park_name, data_date) DO NOTHING;
-                    """,
-                    (
-                        data_date,
-                        data['name'],
-                        data['open_time'],
-                        data['close_time'],
-                        data['forecast_status']
-                    )
-                )
-                saved_count += cursor.rowcount
-        
-        conn.commit()
-        if saved_count > 0:
-            print(f"Successfully saved new daily data for {saved_count} parks.")
-        else:
-            print("Daily park data is already up-to-date.")
-            
-    except Exception as e:
-        print(f"Error saving daily park data: {e}", file=sys.stderr)
-        conn.rollback()
+    for entity in data['liveData']:
+        if entity.get('entityType') in park_entity_types and entity.get('name') in main_park_names:
+            name = entity['name']
+            status = entity.get('status', 'Unknown')
+            park_statuses[name] = status
+            print(f"Status check: {name} is {status}")
+    
+    return park_statuses
 
 def save_to_database(data, conn):
     """Saves the relevant ride data to the PostgreSQL database."""
@@ -150,19 +130,18 @@ def save_to_database(data, conn):
             park_map[entity['id']] = entity.get('name')
             
     if not park_map:
-        print("Warning: park_map is EMPTY. No parks found.")
+        print("Warning: park_map is EMPTY. No parks found in liveData.")
     else:
-        print(f"Built park_map with {len(park_map)} parks.")
+        print(f"Built park_map with {len(park_map)} parks from liveData.")
 
     try:
         with conn.cursor() as cursor:
+            # Iterate over the LIVEDATA list for wait times
             for entity in data['liveData']:
-                # We only want to save ATTRACTION entities
                 if entity.get('entityType') == 'ATTRACTION':
                     
-                    # --- Correct Park Name Logic ---
                     park_name = "Unknown" 
-                    park_id = entity.get('parkId') # Confirmed from log
+                    park_id = entity.get('parkId')
                     
                     if park_id:
                         park_name = park_map.get(park_id, "Unknown")
@@ -170,12 +149,10 @@ def save_to_database(data, conn):
                     ride_name = entity.get('name')
                     status = entity.get('status')
                     
-                    # --- Correct Attraction Type Logic ---
+                    # --- FIX: Changed 'type' to 'event_type' ---
                     entity_tags = entity.get('tags', {})
-                    # This is the line we changed!
                     attraction_type = entity_tags.get('event_type')
                     
-                    # --- Wait Time Logic ---
                     wait_time = None
                     if 'queue' in entity and 'STANDBY' in entity['queue']:
                         wait_time = entity['queue']['STANDBY'].get('waitTime')
@@ -191,7 +168,7 @@ def save_to_database(data, conn):
                         rides_processed += 1
         
         conn.commit()
-        print(f"Successfully saved data for {rides_processed} rides.")
+        print(f"Successfully saved data for {rides_processed} rides. (Using 'event_type' for attraction_type)")
     
     except Exception as e:
         print(f"Error during database operation: {e}", file=sys.stderr)
@@ -210,30 +187,35 @@ def main():
     api_data = fetch_wait_times()
     
     if api_data:
-        park_data_list = get_main_park_data(api_data)
         
-        if park_data_list:
-            all_closed = all(data['status'] == 'CLOSED' for data in park_data_list)
-            found_all_parks = len(park_data_list) == 4
+        # 1. Get live park statuses
+        park_statuses = get_main_park_data(api_data)
+        
+        if park_statuses:
+            # 2. Check if all parks are closed
+            all_closed = all(status == 'CLOSED' for status in park_statuses.values())
+            found_all_parks = len(park_statuses) == 4
 
             if found_all_parks and all_closed:
                 print("All 4 main parks are reporting 'CLOSED'. Exiting script.")
-                sys.exit(0)
+                sys.exit(0) # Exit successfully
             elif not found_all_parks:
-                print("Warning: Did not find all 4 main parks in API response. Proceeding just in case.")
+                print("Warning: Did not find all 4 main parks in liveData. Proceeding just in case.")
             else:
                 print("At least one main park is open. Proceeding to save data.")
         else:
-            print("Could not determine park statuses. Proceeding to save data.")
+            print("Could not determine park statuses from liveData. Proceeding to save data.")
 
         try:
             with psycopg2.connect(DB_URL) as conn:
                 print("Database connection successful.")
                 
-                # Try to save the daily park data (hours/forecast)
-                save_daily_park_data(park_data_list, conn)
+                # 3. Try to save the daily park data (hours/forecast)
+                #    This now reads from api_data['schedule']
+                save_daily_park_data(api_data, conn)
                 
-                # Save the wait time data
+                # 4. Save the wait time data
+                #    This now reads from api_data['liveData']
                 save_to_database(api_data, conn)
                 
         except psycopg2.OperationalError as e:
