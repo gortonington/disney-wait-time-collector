@@ -237,10 +237,10 @@ def save_to_database(data, conn):
                     status = entity.get('status')
                     
                     # --- NEW ATTRACTION_TYPE LOGIC (WITH FALLBACK) ---
-                    entity_tags = entity.get('tags', {})
-                    attraction_type = entity_tags.get('event_type') # Try to get 'event_type' first
+                    # --- entity_tags = entity.get('tags', {}) ---
+                    # attraction_type = entity_tags.get('event_type') # Try to get 'event_type' first
                     
-                    if not attraction_type: # If it's None or empty...
+                    #if not attraction_type: # If it's None or empty...
                         attraction_type = entity.get('entityType') #...fallback to 'entityType'
                     # --- END NEW LOGIC ---
                     
