@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 # --- CONFIGURATION ---
 BATCH_SIZE = 10000  # Process 10,000 rows at a time
-ARCHIVE_OLDER_THAN_DAYS = 90 # Archive data older than 90 days (3 months)
+ARCHIVE_OLDER_THAN_DAYS = 1 # Archive data older than 90 days (3 months)
 
 # --- LOAD SECRETS ---
 try:
