@@ -15,7 +15,6 @@ try:
     DB_URL = os.environ["DB_CONNECTION_STRING"]
     GDRIVE_KEY_JSON = os.environ["GDRIVE_SERVICE_ACCOUNT_KEY"]
     USER_EMAIL = os.environ["MY_PERSONAL_EMAIL"]
-    # NEW: Load the Folder ID
     FOLDER_ID = os.environ["GDRIVE_FOLDER_ID"]
 except KeyError as e:
     print(f"---CRITICAL ERROR: Environment variable {e} not set.---", file=sys.stderr)
