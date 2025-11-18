@@ -33,4 +33,5 @@ jobs:
           DB_CONNECTION_STRING: ${{ secrets.DB_CONNECTION_STRING }}
           GDRIVE_SERVICE_ACCOUNT_KEY: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_KEY }}
           MY_PERSONAL_EMAIL: ${{ secrets.MY_PERSONAL_EMAIL }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: python archive.py
