@@ -5,7 +5,7 @@ on:
   # NEW (Daily):   '0 5 * * *' 
   # This means "Run at 5:00 AM UTC, every single day."
   schedule:
-    - cron: '0 5 * * *'
+    - cron: '0 5 * * 5'
   
   # This line lets you run it manually from the "Actions" tab
   workflow_dispatch:
