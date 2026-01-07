@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 # --- CONFIGURATION ---
 BATCH_SIZE = 5000
-ARCHIVE_OLDER_THAN_DAYS = 5
+ARCHIVE_OLDER_THAN_DAYS = 6
 
 # --- LOAD SECRETS ---
 try:
