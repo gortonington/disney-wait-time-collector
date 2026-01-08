@@ -86,6 +86,16 @@ def archive_table(db_conn, gc, table_name, date_column, primary_key):
             return 0
 
         while True:
+            # --- START DEBUG PRINTS ---
+            print(f"DEBUG: Using ARCHIVE_OLDER_THAN_DAYS = {ARCHIVE_OLDER_THAN_DAYS}")
+            cursor.execute("SELECT NOW() - INTERVAL '%s days'", (ARCHIVE_OLDER_THAN_DAYS,))
+            cutoff_date = cursor.fetchone()[0]
+            print(f"DEBUG: The DB is looking for rows older than: {cutoff_date}")
+            # --- END DEBUG PRINTS ---
+
+            print(f"Fetching batch of {BATCH_SIZE} old rows...")
+            # ... existing cursor.execute code ...
+            
             print(f"Fetching batch of {BATCH_SIZE} old rows...")
             cursor.execute(
                 f"""
