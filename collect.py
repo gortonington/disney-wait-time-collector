@@ -3,8 +3,7 @@ import requests
 import psycopg2
 import sys
 from datetime import datetime, timezone
-import json # Make sure this is still here
-_debug_main_park_printed = False # This will help us print only once
+import json 
 
 # --- 1. CONFIGURATION ---
 DB_URL = os.environ.get("DB_CONNECTION_STRING")
@@ -34,70 +33,6 @@ def fetch_schedule_data():
     except requests.exceptions.RequestException as e:
         print(f"Error fetching schedule data: {e}", file=sys.stderr)
         return None
-
-def get_main_park_data(data):
-    """
-    Finds the 4 main theme parks and returns their full operating data.
-    Returns a list of dictionaries.
-    """
-    global _debug_main_park_printed # Use the global flag
-    
-    main_park_names = [
-        "Magic Kingdom Park",
-        "Epcot",
-        "Disney's Hollywood Studios",
-        "Disney's Animal Kingdom Theme Park"
-    ]
-    park_data_list = []
-    
-    if 'liveData' not in data:
-        print("No 'liveData' key in API response.")
-        return []
-
-    park_entity_types = ["THEME_PARK", "PARK"]
-
-    for entity in data['liveData']:
-        if entity.get('entityType') in park_entity_types and entity.get('name') in main_park_names:
-            
-            # --- NEW DEBUG LOGIC ---
-            if not _debug_main_park_printed:
-                print("\n\n--- DEBUG: FOUND A MAIN PARK ENTITY ---")
-                try:
-                    print(json.dumps(entity, indent=2))
-                except Exception as e:
-                    print(f"Error printing entity: {e}")
-                print("---------------------------------------\n\n")
-                _debug_main_park_printed = True
-            # --- END DEBUG LOGIC ---
-
-            name = entity['name']
-            status = entity.get('status', 'Unknown')
-            
-            # These are the field names we need to verify
-            forecast_status = entity.get('crowdLevel', 'Unknown') 
-            open_time = None
-            close_time = None
-
-            op_hours_list = entity.get('operatingHours', [])
-            for schedule in op_hours_list:
-                if schedule.get('type') == 'OPERATING':
-                    open_time = schedule.get('startTime')
-                    close_time = schedule.get('endTime')
-                    break
-            
-            park_data = {
-                "name": name,
-                "status": status,
-                "forecast_status": forecast_status,
-                "open_time": open_time,
-                "close_time": close_time
-            }
-            park_data_list.append(park_data)
-            
-            # This print is still useful
-            print(f"Status check: {name} is {status}. Open: {open_time} Close: {close_time}")
-    
-    return park_data_list
 
 def get_main_park_data(data):
     """
@@ -203,12 +138,10 @@ def save_daily_park_data(schedule_data, conn):
         print(f"Error saving daily park data: {e}", file=sys.stderr)
         conn.rollback()
 
-# --- MODIFIED: Added 'run_time' as a new parameter ---
-# --- MODIFIED: Added 'run_time' as a new parameter ---
 def save_to_database(data, conn, run_time):
     """Saves the relevant ride data from the 'liveData' list."""
     rides_processed = 0
-    rides_skipped = 0 # <-- NEW: Counter for skipped records
+    rides_skipped = 0 
     
     if 'liveData' not in data:
         print("No 'liveData' key in API response.")
@@ -229,7 +162,7 @@ def save_to_database(data, conn, run_time):
         with conn.cursor() as cursor:
             for entity in data['liveData']:
                     
-                    # --- NEW LOGIC: Check for parkId FIRST ---
+                    # Check for parkId FIRST
                     park_id = entity.get('parkId')
                     
                     # If park_id is valid (not None), process the ride.
@@ -258,10 +191,8 @@ def save_to_database(data, conn, run_time):
                     # If park_id is None (null), skip this entity
                     else:
                         rides_skipped += 1
-                    # --- END OF NEW LOGIC ---
         
         conn.commit()
-        # --- MODIFIED: Updated print statement ---
         print(f"Successfully saved data for {rides_processed} rides. Skipped {rides_skipped} attractions with null parkId. (Using script-generated timestamp)")
     
     except Exception as e:
@@ -278,15 +209,16 @@ def main():
     
     print("Successfully loaded DB_CONNECTION_STRING secret.")
 
-    # --- NEW: Capture the current time in UTC ---
+    # Capture the current time in UTC
     script_run_time = datetime.now(timezone.utc)
     
-    # --- Call both endpoints ---
+    # Call both endpoints
     api_data = fetch_wait_times()
     schedule_data = fetch_schedule_data()
     
     if api_data:
         
+        # This now correctly calls the shorter, simpler function
         park_statuses = get_main_park_data(api_data)
         
         if park_statuses:
@@ -310,7 +242,7 @@ def main():
                 # Pass schedule_data to the daily data saver
                 save_daily_park_data(schedule_data, conn)
                 
-                # --- MODIFIED: Pass the script_run_time to the wait time saver ---
+                # Pass the script_run_time to the wait time saver
                 save_to_database(api_data, conn, script_run_time)
                 
         except psycopg2.OperationalError as e:
